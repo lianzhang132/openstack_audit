@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}OpenStack云平台管理审计系统{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <a href="{{ url_for('index') }}">☁️ OpenStack云平台审计系统</a>
+        </div>
+        <ul class="nav-menu">
+            <li><a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">📊 仪表盘</a></li>
+            <li><a href="{{ url_for('vm_list') }}" class="{% if request.endpoint in ['vm_list', 'vm_detail', 'vm_add', 'vm_edit'] %}active{% endif %}">🖥️ 云主机</a></li>
+            <li><a href="{{ url_for('recycle_list') }}" class="{% if request.endpoint == 'recycle_list' %}active{% endif %}">♻️ 回收管理</a></li>
+            <li><a href="{{ url_for('project_list') }}" class="{% if request.endpoint in ['project_list', 'project_edit', 'project_add'] %}active{% endif %}">📁 项目管理</a></li>
+        </ul>
+        <div class="nav-actions">
+            <form method="POST" action="{{ url_for('api_sync_all') }}" class="inline-form" onsubmit="return confirm('确定要执行全量同步吗？')">
+                <button type="submit" class="btn btn-sm btn-outline">🔄 同步数据</button>
+            </form>
+        </div>
+    </nav>
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">
+                        {{ message }}
+                        <span class="alert-close" onclick="this.parentElement.remove()">×</span>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <footer class="footer">
+        <p>OpenStack云平台管理审计记录系统 © 2024</p>
+    </footer>
+
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

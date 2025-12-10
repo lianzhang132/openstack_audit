@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}编辑云主机 - {{ vm.name or vm.uuid[:8] }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>✏️ 编辑云主机</h1>
+    <a href="{{ url_for('vm_detail', id=vm.id) }}" class="btn btn-outline">← 返回详情</a>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <form method="POST" class="form">
+            <div class="form-section">
+                <h3>📌 OpenStack信息（只读）</h3>
+                <div class="info-grid readonly">
+                    <div class="info-item">
+                        <label>UUID</label>
+                        <span><code>{{ vm.uuid }}</code></span>
+                    </div>
+                    <div class="info-item">
+                        <label>名称</label>
+                        <span>{{ vm.name or '-' }}</span>
+                    </div>
+                    <div class="info-item">
+                        <label>规格</label>
+                        <span>{{ vm.get_flavor_display() }}</span>
+                    </div>
+                    <div class="info-item">
+                        <label>宿主机</label>
+                        <span>{{ vm.host or '-' }}</span>
+                    </div>
+                    <div class="info-item">
+                        <label>OpenStack项目</label>
+                        <span>{{ vm.openstack_project_name or vm.openstack_project_id or '-' }}</span>
+                    </div>
+                    <div class="info-item">
+                        <label>状态</label>
+                        <span>{{ vm.openstack_status or '-' }}</span>
+                    </div>
+                </div>
+                <p class="text-muted">以上信息由OpenStack同步，如需更新请点击"同步"按钮</p>
+            </div>
+
+            <div class="form-section">
+                <h3>✏️ 可编辑信息</h3>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="project_id">所属项目（公司内部）</label>
+                        <select id="project_id" name="project_id" class="form-control">
+                            <option value="">-- 选择项目 --</option>
+                            {% for project in projects %}
+                            <option value="{{ project.id }}" {% if vm.project_id == project.id %}selected{% endif %}>{{ project.name }}{% if project.department %} ({{ project.department }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="applicant">申请人</label>
+                        <input type="text" id="applicant" name="applicant" value="{{ vm.applicant or '' }}" class="form-control">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="purpose">用途说明</label>
+                    <textarea id="purpose" name="purpose" class="form-control" rows="2">{{ vm.purpose or '' }}</textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="created_date">创建日期</label>
+                        <input type="date" id="created_date" name="created_date" value="{{ vm.created_date.strftime('%Y-%m-%d') if vm.created_date else '' }}" class="form-control">
+                    </div>
+
+                    <div class="form-group">
+                        <label>当前到期日期</label>
+                        <input type="text" value="{% if vm.is_long_term %}长期使用{% elif vm.expire_date %}{{ vm.expire_date.strftime('%Y-%m-%d') }}{% else %}未设置{% endif %}" class="form-control" disabled>
+                        <small class="text-muted">修改创建日期会自动重新计算到期日期（非长期使用时）</small>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="is_long_term" name="is_long_term" {% if vm.is_long_term %}checked{% endif %} onchange="toggleLongTerm()">
+                        长期使用（不设置过期时间）
+                    </label>
+                </div>
+
+                <div class="form-group" id="long_term_reason_group" {% if not vm.is_long_term %}style="display:none;"{% endif %}>
+                    <label for="long_term_reason">长期使用理由</label>
+                    <textarea id="long_term_reason" name="long_term_reason" class="form-control" rows="2">{{ vm.long_term_reason or '' }}</textarea>
+                </div>
+                
+                <input type="hidden" name="operator" value="admin">
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-lg">💾 保存修改</button>
+                <a href="{{ url_for('vm_detail', id=vm.id) }}" class="btn btn-outline">取消</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleLongTerm() {
+    const checked = document.getElementById('is_long_term').checked;
+    document.getElementById('long_term_reason_group').style.display = checked ? 'block' : 'none';
+}
+</script>
+{% endblock %}

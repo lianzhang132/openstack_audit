@@ -1,0 +1,7 @@
+Flask==2.3.3
+Flask-SQLAlchemy==3.0.5
+openstacksdk==1.5.0
+APScheduler==3.10.4
+python-dateutil==2.8.2
+Werkzeug==2.3.7
+openpyxl==3.1.2

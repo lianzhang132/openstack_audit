@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}添加变更记录 - {{ vm.name or vm.uuid[:8] }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📝 添加变更记录</h1>
+    <a href="{{ url_for('vm_detail', id=vm.id) }}" class="btn btn-outline">← 返回详情</a>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>云主机：{{ vm.name or vm.uuid[:8] }}</h3>
+    </div>
+    <div class="card-body">
+        <form method="POST" class="form">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="change_type">变更类型 <span class="required">*</span></label>
+                    <select id="change_type" name="change_type" class="form-control" required>
+                        {% for value, label in change_types %}
+                        <option value="{{ value }}" {% if value == 'manual' %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="operator">操作人</label>
+                    <input type="text" id="operator" name="operator" class="form-control" placeholder="操作人姓名">
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="changed_at">变更时间</label>
+                <input type="datetime-local" id="changed_at" name="changed_at" class="form-control" value="{{ now }}">
+                <small class="text-muted">留空则使用当前时间</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="message">变更说明 <span class="required">*</span></label>
+                <input type="text" id="message" name="message" class="form-control" required placeholder="简要说明变更内容">
+            </div>
+            
+            <div class="form-group">
+                <label for="detail">详细描述</label>
+                <textarea id="detail" name="detail" class="form-control" rows="4" placeholder="可选，填写详细的变更信息..."></textarea>
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-lg">💾 保存记录</button>
+                <a href="{{ url_for('vm_detail', id=vm.id) }}" class="btn btn-outline">取消</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>💡 说明</h3>
+    </div>
+    <div class="card-body">
+        <div class="info-box">
+            <p>手动添加变更记录用于记录：</p>
+            <ul>
+                <li>线下进行的操作（如：手动迁移、配置变更等）</li>
+                <li>历史变更补录</li>
+                <li>备注说明</li>
+                <li>其他需要记录的信息</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // 设置默认时间为当前时间
+    const now = new Date();
+    const offset = now.getTimezoneOffset() * 60000;
+    const localTime = new Date(now - offset).toISOString().slice(0, 16);
+    document.getElementById('changed_at').value = localTime;
+});
+</script>
+{% endblock %}

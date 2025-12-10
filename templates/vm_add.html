@@ -1,0 +1,375 @@
+{% extends "base.html" %}
+
+{% block title %}添加云主机 - OpenStack云平台审计系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>➕ 添加云主机记录</h1>
+    <a href="{{ url_for('vm_list') }}" class="btn btn-outline">← 返回列表</a>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <form method="POST" class="form" id="addForm">
+
+            <!-- 模式选择 -->
+            <div class="form-section">
+                <h3>📋 添加模式</h3>
+                <div class="mode-selector">
+                    <label class="mode-option">
+                        <input type="radio" name="add_mode" value="auto" checked onchange="toggleMode()">
+                        <span class="mode-card">
+                            <span class="mode-icon">🔄</span>
+                            <span class="mode-title">自动获取</span>
+                            <span class="mode-desc">从OpenStack自动获取云主机信息</span>
+                        </span>
+                    </label>
+                    <label class="mode-option">
+                        <input type="radio" name="add_mode" value="manual" onchange="toggleMode()">
+                        <span class="mode-card">
+                            <span class="mode-icon">✏️</span>
+                            <span class="mode-title">手动填写</span>
+                            <span class="mode-desc">手动填写所有信息（适用于已删除的云主机历史记录）</span>
+                        </span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- 自动模式：OpenStack信息 -->
+            <div class="form-section" id="auto_section">
+                <h3>📌 OpenStack信息</h3>
+
+                <div class="form-group">
+                    <label for="uuid">云主机UUID <span class="required">*</span></label>
+                    <div class="input-with-button">
+                        <input type="text" id="uuid" name="uuid" class="form-control" required placeholder="输入UUID或从下方选择">
+                        <button type="button" class="btn" onclick="fetchServerInfo()">获取信息</button>
+                    </div>
+                </div>
+
+                {% if available_servers %}
+                <div class="form-group">
+                    <label>从OpenStack选择（未记录的云主机）</label>
+                    <select id="server_select" class="form-control" onchange="selectServer(this.value)">
+                        <option value="">-- 选择云主机 --</option>
+                        {% for server in available_servers %}
+                        <option value="{{ server.id }}">{{ server.name }} ({{ server.id[:8] }}...)</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endif %}
+
+                <div id="server_info" style="display:none;">
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <label>名称</label>
+                            <span id="info_name">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>规格</label>
+                            <span id="info_flavor">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>镜像</label>
+                            <span id="info_image">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>宿主机</label>
+                            <span id="info_host">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>网络</label>
+                            <span id="info_networks">-</span>
+                        </div>
+                        <div class="info-item">
+                            <label>存储卷</label>
+                            <span id="info_volumes">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 手动模式：手动填写信息 -->
+            <div class="form-section" id="manual_section" style="display:none;">
+                <h3>📌 云主机信息（手动填写）</h3>
+
+                <div class="form-group">
+                    <label for="uuid_manual">云主机UUID <span class="required">*</span></label>
+                    <input type="text" id="uuid_manual" class="form-control" placeholder="输入云主机UUID">
+                    <small class="text-muted">如果没有UUID，可以输入一个唯一标识</small>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="name">云主机名称</label>
+                        <input type="text" id="name" name="name" class="form-control" placeholder="云主机名称">
+                    </div>
+                    <div class="form-group">
+                        <label for="host">宿主机</label>
+                        <input type="text" id="host" name="host" class="form-control" placeholder="宿主机名称">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="image_name">镜像名称</label>
+                        <input type="text" id="image_name" name="image_name" class="form-control" placeholder="如：CentOS 7.9">
+                    </div>
+                    <div class="form-group">
+                        <label for="flavor">规格名称</label>
+                        <input type="text" id="flavor" name="flavor" class="form-control" placeholder="如：4C8G">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="vcpus">CPU（核）</label>
+                        <input type="number" id="vcpus" name="vcpus" class="form-control" placeholder="如：4">
+                    </div>
+                    <div class="form-group">
+                        <label for="ram">内存（MB）</label>
+                        <input type="number" id="ram" name="ram" class="form-control" placeholder="如：8192">
+                    </div>
+                    <div class="form-group">
+                        <label for="disk">系统盘（GB）</label>
+                        <input type="number" id="disk" name="disk" class="form-control" placeholder="如：50">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="ip_addresses">IP地址（每行一个）</label>
+                    <textarea id="ip_addresses" name="ip_addresses" class="form-control" rows="2" placeholder="192.168.1.10&#10;192.168.2.20"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="volume_info">存储卷信息（每行一个）</label>
+                    <textarea id="volume_info" name="volume_info" class="form-control" rows="2" placeholder="data-volume-01&#10;backup-volume-01"></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="openstack_status">OpenStack状态</label>
+                        <select id="openstack_status" name="openstack_status" class="form-control">
+                            <option value="ACTIVE">ACTIVE（运行中）</option>
+                            <option value="SHUTOFF">SHUTOFF（已关机）</option>
+                            <option value="DELETED" selected>DELETED（已删除）</option>
+                            <option value="ERROR">ERROR（错误）</option>
+                            <option value="UNKNOWN">UNKNOWN（未知）</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="status">记录状态</label>
+                        <select id="status" name="status" class="form-control">
+                            <option value="in_use">使用期内</option>
+                            <option value="vm_pending">虚机待回收</option>
+                            <option value="attached_pending">磁盘网卡待回收</option>
+                            <option value="recycled">完全回收</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group" id="vm_deleted_date_group">
+                    <label for="vm_deleted_date">虚机删除日期</label>
+                    <input type="date" id="vm_deleted_date" name="vm_deleted_date" class="form-control">
+                    <small class="text-muted">如果云主机已删除，填写删除日期</small>
+                </div>
+            </div>
+
+            <!-- 通用：手动填写信息 -->
+            <div class="form-section">
+                <h3>✏️ 业务信息</h3>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="project_id">所属项目（公司内部）</label>
+                        <select id="project_id" name="project_id" class="form-control">
+                            <option value="">-- 选择项目 --</option>
+                            {% for project in projects %}
+                            <option value="{{ project.id }}">{{ project.name }}{% if project.department %} ({{ project.department }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <small class="text-muted">如需添加新项目，请先到<a href="{{ url_for('project_list') }}" target="_blank">项目管理</a>添加</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="applicant">申请人</label>
+                        <input type="text" id="applicant" name="applicant" class="form-control" placeholder="申请人姓名">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="purpose">用途说明</label>
+                    <textarea id="purpose" name="purpose" class="form-control" rows="2" placeholder="描述云主机的用途"></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="created_date">创建日期</label>
+                        <input type="date" id="created_date" name="created_date" class="form-control">
+                    </div>
+                    <div class="form-group">
+                        <label for="expire_date">到期日期</label>
+                        <input type="date" id="expire_date" name="expire_date" class="form-control">
+                        <small class="text-muted">留空则自动计算（创建日期+90天）</small>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="is_long_term" name="is_long_term" onchange="toggleLongTerm()">
+                        长期使用（不设置过期时间）
+                    </label>
+                </div>
+
+                <div class="form-group" id="long_term_reason_group" style="display:none;">
+                    <label for="long_term_reason">长期使用理由</label>
+                    <textarea id="long_term_reason" name="long_term_reason" class="form-control" rows="2" placeholder="请说明长期使用的原因"></textarea>
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-lg">💾 保存记录</button>
+                <a href="{{ url_for('vm_list') }}" class="btn btn-outline">取消</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+.mode-selector {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+.mode-option {
+    flex: 1;
+    cursor: pointer;
+}
+
+.mode-option input {
+    display: none;
+}
+
+.mode-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    border: 2px solid #dcdfe6;
+    border-radius: 8px;
+    transition: all 0.3s;
+}
+
+.mode-option input:checked + .mode-card {
+    border-color: #409eff;
+    background: #ecf5ff;
+}
+
+.mode-icon {
+    font-size: 2rem;
+    margin-bottom: 10px;
+}
+
+.mode-title {
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+.mode-desc {
+    font-size: 0.85rem;
+    color: #909399;
+    text-align: center;
+}
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleMode() {
+    const mode = document.querySelector('input[name="add_mode"]:checked').value;
+    const autoSection = document.getElementById('auto_section');
+    const manualSection = document.getElementById('manual_section');
+    const uuidInput = document.getElementById('uuid');
+    const uuidManual = document.getElementById('uuid_manual');
+
+    if (mode === 'auto') {
+        autoSection.style.display = 'block';
+        manualSection.style.display = 'none';
+        uuidInput.name = 'uuid';
+        uuidInput.required = true;
+        uuidManual.name = '';
+        uuidManual.required = false;
+    } else {
+        autoSection.style.display = 'none';
+        manualSection.style.display = 'block';
+        uuidInput.name = '';
+        uuidInput.required = false;
+        uuidManual.name = 'uuid';
+        uuidManual.required = true;
+    }
+}
+
+function selectServer(uuid) {
+    if (uuid) {
+        document.getElementById('uuid').value = uuid;
+        fetchServerInfo();
+    }
+}
+
+function fetchServerInfo() {
+    const uuid = document.getElementById('uuid').value.trim();
+    if (!uuid) {
+        alert('请输入UUID');
+        return;
+    }
+
+    fetch(`/api/openstack/server/${uuid}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const info = data.data;
+                document.getElementById('server_info').style.display = 'block';
+                document.getElementById('info_name').textContent = info.name || '-';
+                document.getElementById('info_flavor').textContent = info.flavor || '-';
+                document.getElementById('info_image').textContent = info.image ? info.image.name : '-';
+                document.getElementById('info_host').textContent = info.host || '-';
+
+                if (info.networks && info.networks.length > 0) {
+                    document.getElementById('info_networks').innerHTML = info.networks.map(n =>
+                        `<span class="ip-tag">${n.ip}</span>`
+                    ).join(' ');
+                } else {
+                    document.getElementById('info_networks').textContent = '-';
+                }
+
+                if (info.volumes && info.volumes.length > 0) {
+                    document.getElementById('info_volumes').textContent = info.volumes.map(v =>
+                        `${v.name || v.id.substring(0,8)} (${v.size}GB)`
+                    ).join(', ');
+                } else {
+                    document.getElementById('info_volumes').textContent = '-';
+                }
+            } else {
+                alert('获取信息失败: ' + data.error + '\n\n如果云主机已删除，请使用"手动填写"模式');
+                document.getElementById('server_info').style.display = 'none';
+            }
+        })
+        .catch(err => {
+            alert('请求失败: ' + err);
+        });
+}
+
+function toggleLongTerm() {
+    const checked = document.getElementById('is_long_term').checked;
+    document.getElementById('long_term_reason_group').style.display = checked ? 'block' : 'none';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('created_date').value = today;
+});
+</script>
+{% endblock %}

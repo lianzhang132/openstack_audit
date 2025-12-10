@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+
+{% block title %}回收管理 - OpenStack云平台审计系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>♻️ 回收管理</h1>
+</div>
+
+<!-- 待回收虚机 -->
+<div class="card">
+    <div class="card-header">
+        <h3>🖥️ 待回收云主机 ({{ vm_pending|length }})</h3>
+    </div>
+    <div class="card-body">
+        {% if vm_pending %}
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>名称</th>
+                        <th>UUID</th>
+                        <th>项目</th>
+                        <th>IP地址</th>
+                        <th>申请人</th>
+                        <th>到期日期</th>
+                        <th>已过期天数</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for vm in vm_pending %}
+                    <tr>
+                        <td><a href="{{ url_for('vm_detail', id=vm.id) }}">{{ vm.name or '-' }}</a></td>
+                        <td><code>{{ vm.uuid[:8] }}...</code></td>
+                        <td>{{ vm.project.name if vm.project else '-' }}</td>
+                        <td>
+                            {% for net in vm.get_networks()[:1] %}
+                            <span class="ip-tag">{{ net.ip }}</span>
+                            {% endfor %}
+                        </td>
+                        <td>{{ vm.applicant or '-' }}</td>
+                        <td>{{ vm.expire_date.strftime('%Y-%m-%d') if vm.expire_date else '-' }}</td>
+                        <td>
+                            {% if vm.expire_date %}
+                            {% set days = (now().date() - vm.expire_date).days %}
+                            <span class="badge badge-danger">{{ days }} 天</span>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="btn-group">
+                                <form method="POST" action="{{ url_for('vm_extend', id=vm.id) }}" class="inline-form">
+                                    <input type="hidden" name="extend_days" value="90">
+                                    <input type="hidden" name="reason" value="回收管理页面延期">
+                                    <button type="submit" class="btn btn-sm btn-success" onclick="return confirm('确定延期90天？')">延期</button>
+                                </form>
+                                <form method="POST" action="{{ url_for('vm_recycle', id=vm.id) }}" class="inline-form">
+                                    <input type="hidden" name="operator" value="admin">
+                                    <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('确定回收此云主机？回收后附属资源将保留30天。')">回收虚机</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted">暂无待回收的云主机 ✨</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 待回收附属资源 -->
+<div class="card">
+    <div class="card-header">
+        <h3>📎 待回收附属资源 ({{ attached_pending|length }})</h3>
+    </div>
+    <div class="card-body">
+        {% if attached_pending %}
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>原云主机</th>
+                        <th>UUID</th>
+                        <th>VM删除日期</th>
+                        <th>已删除天数</th>
+                        <th>附属资源</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for vm in attached_pending %}
+                    <tr>
+                        <td><a href="{{ url_for('vm_detail', id=vm.id) }}">{{ vm.name or '-' }}</a></td>
+                        <td><code>{{ vm.uuid[:8] }}...</code></td>
+                        <td>{{ vm.vm_deleted_date.strftime('%Y-%m-%d') if vm.vm_deleted_date else '-' }}</td>
+                        <td>
+                            {% if vm.vm_deleted_date %}
+                            {% set days = (now().date() - vm.vm_deleted_date).days %}
+                            <span class="badge badge-warning">{{ days }} 天</span>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% set pending_count = vm.attached_resources.filter_by(status='pending_recycle').count() %}
+                            {% set volumes = vm.get_volumes() %}
+                            {% set networks = vm.get_networks() %}
+                            <span class="text-muted">
+                                💾 {{ volumes|length }} 个卷,
+                                🔌 {{ networks|length }} 个网卡
+                            </span>
+                        </td>
+                        <td>
+                            <form method="POST" action="{{ url_for('vm_recycle_attached', id=vm.id) }}" class="inline-form">
+                                <input type="hidden" name="operator" value="admin">
+                                <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('⚠️ 确定回收所有附属资源？\n\n此操作将删除：\n- 所有关联的存储卷\n- 所有关联的网络端口\n\n⚠️ 此操作不可恢复！')">
+                                    回收附属资源
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted">暂无待回收的附属资源 ✨</p>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 回收说明 -->
+<div class="card">
+    <div class="card-header">
+        <h3>📋 回收规范说明</h3>
+    </div>
+    <div class="card-body">
+        <div class="info-box">
+            <h4>回收流程</h4>
+            <div class="recycle-flow">
+                <div class="flow-item">
+                    <span class="flow-icon">✅</span>
+                    <span class="flow-title">使用期内</span>
+                    <span class="flow-desc">云主机正常使用，默认使用期为<strong>3个月</strong></span>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-item">
+                    <span class="flow-icon">⚠️</span>
+                    <span class="flow-title">虚机待回收</span>
+                    <span class="flow-desc">到期后自动进入，可延期或确认回收虚机</span>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-item">
+                    <span class="flow-icon">🗑️</span>
+                    <span class="flow-title">附属待回收</span>
+                    <span class="flow-desc">虚机删除后<strong>30天</strong>，附属资源进入待回收</span>
+                </div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-item">
+                    <span class="flow-icon">✔️</span>
+                    <span class="flow-title">完全回收</span>
+                    <span class="flow-desc">所有资源已清理，不可恢复</span>
+                </div>
+            </div>
+
+            <h4 class="mt-3">延期申请</h4>
+            <p>如需延期，请说明延期原因，支持延期30/60/90/180天</p>
+
+            <h4>长期保留</h4>
+            <p>有合理原因的云主机可设置为长期保留，不受使用期限制</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

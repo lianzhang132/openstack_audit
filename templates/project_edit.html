@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}编辑项目 - {{ project.name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>✏️ 编辑项目</h1>
+    <a href="{{ url_for('project_list') }}" class="btn btn-outline">← 返回列表</a>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <form method="POST" class="form">
+            <div class="form-group">
+                <label for="name">项目名称 <span class="required">*</span></label>
+                <input type="text" id="name" name="name" value="{{ project.name }}" class="form-control" required>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="owner">项目负责人</label>
+                    <input type="text" id="owner" name="owner" value="{{ project.owner or '' }}" class="form-control">
+                </div>
+
+                <div class="form-group">
+                    <label for="department">所属部门</label>
+                    <input type="text" id="department" name="department" value="{{ project.department or '' }}" class="form-control">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="description">项目描述</label>
+                <textarea id="description" name="description" class="form-control" rows="3">{{ project.description or '' }}</textarea>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-lg">💾 保存修改</button>
+                <a href="{{ url_for('project_list') }}" class="btn btn-outline">取消</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>📊 关联云主机</h3>
+    </div>
+    <div class="card-body">
+        <p>该项目下共有 <strong>{{ project.virtual_machines.count() }}</strong> 台云主机</p>
+        {% if project.virtual_machines.count() > 0 %}
+        <a href="{{ url_for('vm_list', project_id=project.id) }}" class="btn btn-outline">查看云主机列表</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

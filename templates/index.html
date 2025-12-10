@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}仪表盘 - OpenStack云平台审计系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📊 仪表盘</h1>
+    <div class="header-actions">
+        <a href="{{ url_for('vm_add') }}" class="btn btn-primary">➕ 添加云主机</a>
+        <form method="POST" action="{{ url_for('api_init_vms') }}" class="inline-form" onsubmit="return confirm('确定要从OpenStack导入所有云主机吗？已存在的记录将被跳过。')">
+            <button type="submit" class="btn btn-outline">📥 初始化导入</button>
+        </form>
+    </div>
+</div>
+
+<!-- 统计卡片 -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon">🖥️</div>
+        <div class="stat-info">
+            <div class="stat-value">{{ stats.total_vms }}</div>
+            <div class="stat-label">云主机总数</div>
+        </div>
+    </div>
+    <div class="stat-card stat-success">
+        <div class="stat-icon">✅</div>
+        <div class="stat-info">
+            <div class="stat-value">{{ stats.in_use }}</div>
+            <div class="stat-label">使用期内</div>
+        </div>
+    </div>
+    <div class="stat-card stat-warning">
+        <div class="stat-icon">⚠️</div>
+        <div class="stat-info">
+            <div class="stat-value">{{ stats.vm_pending }}</div>
+            <div class="stat-label">虚机待回收</div>
+        </div>
+    </div>
+    <div class="stat-card stat-danger">
+        <div class="stat-icon">🗑️</div>
+        <div class="stat-info">
+            <div class="stat-value">{{ stats.attached_pending }}</div>
+            <div class="stat-label">附属待回收</div>
+        </div>
+    </div>
+    <div class="stat-card stat-info">
+        <div class="stat-icon">🔒</div>
+        <div class="stat-info">
+            <div class="stat-value">{{ stats.long_term }}</div>
+            <div class="stat-label">长期保留</div>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon">📁</div>
+        <div class="stat-info">
+            <div class="stat-value">{{ stats.projects }}</div>
+            <div class="stat-label">项目数</div>
+        </div>
+    </div>
+</div>
+
+<div class="content-grid">
+    <!-- 即将过期 -->
+    <div class="card">
+        <div class="card-header">
+            <h3>⏰ 即将过期（7天内）</h3>
+            <a href="{{ url_for('vm_list', status='in_use') }}" class="btn btn-sm btn-outline">查看全部</a>
+        </div>
+        <div class="card-body">
+            {% if expire_soon %}
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>名称</th>
+                        <th>申请人</th>
+                        <th>到期日期</th>
+                        <th>剩余天数</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for vm in expire_soon %}
+                    <tr>
+                        <td>
+                            <a href="{{ url_for('vm_detail', id=vm.id) }}">{{ vm.name or vm.uuid[:8] }}</a>
+                        </td>
+                        <td>{{ vm.applicant or '-' }}</td>
+                        <td>{{ vm.expire_date.strftime('%Y-%m-%d') if vm.expire_date else '-' }}</td>
+                        <td>
+                            {% set days = vm.days_until_expire() %}
+                            <span class="badge {% if days is not none and days <= 3 %}badge-danger{% else %}badge-warning{% endif %}">
+                                {{ days if days is not none else '-' }} 天
+                            </span>
+                        </td>
+                        <td>
+                            <a href="{{ url_for('vm_detail', id=vm.id) }}" class="btn btn-sm">查看</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted">暂无即将过期的云主机 👍</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- 最近变更 -->
+    <div class="card">
+        <div class="card-header">
+            <h3>📝 最近变更记录</h3>
+        </div>
+        <div class="card-body">
+            {% if recent_logs %}
+            <div class="log-list">
+                {% for log in recent_logs %}
+                <div class="log-item">
+                    <div class="log-time">{{ log.changed_at.strftime('%m-%d %H:%M') }}</div>
+                    <div class="log-content">
+                        <span class="badge badge-{{ log.change_type }}">{{ log.get_type_display() }}</span>
+                        {% if log.virtual_machine %}
+                        <a href="{{ url_for('vm_detail', id=log.vm_id) }}">{{ log.virtual_machine.name or log.virtual_machine.uuid[:8] }}</a>
+                        {% endif %}
+                        <span class="log-operator">by {{ log.operator or 'system' }}</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-muted">暂无变更记录</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- 快速入口 -->
+<div class="card">
+    <div class="card-header">
+        <h3>🚀 快速操作</h3>
+    </div>
+    <div class="card-body">
+        <div class="quick-actions">
+            <a href="{{ url_for('vm_add') }}" class="quick-action-item">
+                <span class="quick-icon">➕</span>
+                <span>添加云主机</span>
+            </a>
+            <a href="{{ url_for('recycle_list') }}" class="quick-action-item">
+                <span class="quick-icon">♻️</span>
+                <span>回收管理</span>
+            </a>
+            <a href="{{ url_for('project_add') }}" class="quick-action-item">
+                <span class="quick-icon">📁</span>
+                <span>添加项目</span>
+            </a>
+            <a href="{{ url_for('vm_list', status='vm_pending') }}" class="quick-action-item">
+                <span class="quick-icon">⚠️</span>
+                <span>待回收列表</span>
+            </a>
+            <a href="{{ url_for('vm_export') }}" class="quick-action-item">
+                <span class="quick-icon">📥</span>
+                <span>导出Excel</span>
+            </a>
+            <form method="POST" action="{{ url_for('api_sync_all') }}" class="quick-action-form" onsubmit="return confirm('确定要执行全量同步吗？')">
+                <button type="submit" class="quick-action-item">
+                    <span class="quick-icon">🔄</span>
+                    <span>同步数据</span>
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

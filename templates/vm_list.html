@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}云主机列表 - OpenStack云平台审计系统{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>🖥️ 云主机列表</h1>
+    <div class="header-actions">
+        <a href="{{ url_for('vm_export', status=current_status, project_id=current_project, search=search, is_long_term=current_long_term) }}" class="btn btn-success">📥 导出Excel</a>
+        <a href="{{ url_for('vm_add') }}" class="btn btn-primary">➕ 添加云主机</a>
+    </div>
+</div>
+
+<!-- 筛选 -->
+<div class="card filter-card">
+    <div class="card-body">
+        <form method="GET" class="filter-form">
+            <div class="form-group">
+                <label>状态</label>
+                <select name="status" class="form-control">
+                    <option value="">全部状态</option>
+                    <option value="in_use" {% if current_status == 'in_use' %}selected{% endif %}>使用期内</option>
+                    <option value="vm_pending" {% if current_status == 'vm_pending' %}selected{% endif %}>虚机待回收</option>
+                    <option value="attached_pending" {% if current_status == 'attached_pending' %}selected{% endif %}>附属待回收</option>
+                    <option value="recycled" {% if current_status == 'recycled' %}selected{% endif %}>完全回收</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>项目</label>
+                <select name="project_id" class="form-control">
+                    <option value="">全部项目</option>
+                    {% for project in projects %}
+                    <option value="{{ project.id }}" {% if current_project == project.id|string %}selected{% endif %}>{{ project.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>长期保留</label>
+                <select name="is_long_term" class="form-control">
+                    <option value="">全部</option>
+                    <option value="true" {% if current_long_term == 'true' %}selected{% endif %}>是</option>
+                    <option value="false" {% if current_long_term == 'false' %}selected{% endif %}>否</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>搜索</label>
+                <input type="text" name="search" value="{{ search }}" placeholder="名称/UUID/IP/申请人/用途" class="form-control">
+            </div>
+
+            <div class="form-group form-actions">
+                <button type="submit" class="btn btn-primary">🔍 筛选</button>
+                <a href="{{ url_for('vm_list') }}" class="btn btn-outline">清除</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- 列表 -->
+<div class="card">
+    <div class="card-header">
+        <h3>共 {{ vms|length }} 条记录</h3>
+    </div>
+    <div class="card-body">
+        {% if vms %}
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>名称</th>
+                        <th>UUID</th>
+                        <th>所属项目</th>
+                        <th>用途</th>
+                        <th>IP地址</th>
+                        <th>规格</th>
+                        <th>申请人</th>
+                        <th>状态</th>
+                        <th>到期日期</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for vm in vms %}
+                    <tr class="{% if vm.is_expired() %}row-expired{% endif %}">
+                        <td>
+                            <a href="{{ url_for('vm_detail', id=vm.id) }}">
+                                <strong>{{ vm.name or '-' }}</strong>
+                            </a>
+                            {% if vm.is_long_term %}
+                            <span class="badge badge-info" title="长期保留">🔒</span>
+                            {% endif %}
+                        </td>
+                        <td><code title="{{ vm.uuid }}">{{ vm.uuid[:8] }}...</code></td>
+                        <td>{{ vm.project.name if vm.project else '-' }}</td>
+                        <td title="{{ vm.purpose or '' }}">{{ (vm.purpose or '-')[:15] }}{% if vm.purpose and vm.purpose|length > 15 %}...{% endif %}</td>
+                        <td>
+                            {% for net in vm.get_networks()[:2] %}
+                            <span class="ip-tag">{{ net.ip }}</span>
+                            {% endfor %}
+                            {% if vm.get_networks()|length > 2 %}
+                            <span class="text-muted">+{{ vm.get_networks()|length - 2 }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {{ vm.flavor or '-' }}
+                            {% set fd = vm.get_flavor_detail() %}
+                            {% if fd %}
+                            <br><small class="text-muted">{{ fd.vcpus }}C/{{ fd.ram }}M</small>
+                            {% endif %}
+                        </td>
+                        <td>{{ vm.applicant or '-' }}</td>
+                        <td>
+                            <span class="badge badge-{{ vm.status }}">{{ vm.get_status_display() }}</span>
+                        </td>
+                        <td>
+                            {% if vm.is_long_term %}
+                            <span class="text-info">长期</span>
+                            {% elif vm.expire_date %}
+                            {{ vm.expire_date.strftime('%Y-%m-%d') }}
+                            {% set days = vm.days_until_expire() %}
+                            {% if days is not none %}
+                            <br>
+                            {% if days < 0 %}
+                            <small class="text-danger">已过期{{ -days }}天</small>
+                            {% elif days <= 7 %}
+                            <small class="text-warning">剩余{{ days }}天</small>
+                            {% else %}
+                            <small class="text-muted">剩余{{ days }}天</small>
+                            {% endif %}
+                            {% endif %}
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="btn-group">
+                                <a href="{{ url_for('vm_detail', id=vm.id) }}" class="btn btn-sm">详情</a>
+                                <a href="{{ url_for('vm_edit', id=vm.id) }}" class="btn btn-sm">编辑</a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <p>暂无云主机记录</p>
+            <a href="{{ url_for('vm_add') }}" class="btn btn-primary">添加云主机</a>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
