@@ -26,7 +26,8 @@ app.config.from_object(Config)
 init_db(app)
 
 # 初始化定时任务
-init_scheduler(app)
+if app.config['ENABLE_SCHEDULER']:
+    init_scheduler(app)
 
 
 # ============ 模板全局函数 ============
@@ -101,8 +102,7 @@ def update_expire_status():
     #    需要排除：附属资源长期保留、附属资源未过期的
     pending_vms = VirtualMachine.query.filter(
         VirtualMachine.status == VirtualMachine.STATUS_VM_PENDING,
-        VirtualMachine.vm_deleted_date != None,
-        VirtualMachine.is_attached_long_term == False  # 排除附属资源长期保留的
+        VirtualMachine.vm_deleted_date != None
     ).all()
 
     for vm in pending_vms:
@@ -892,14 +892,15 @@ def vm_recycle(id):
     success, message = openstack_service.delete_server(vm.uuid)
 
     old_status = vm.status
-    vm.status = VirtualMachine.STATUS_VM_PENDING
-    vm.vm_deleted_date = datetime.now().date()
-    vm.openstack_status = 'DELETED'
+    if success:
+        vm.status = VirtualMachine.STATUS_VM_PENDING
+        vm.vm_deleted_date = datetime.now().date()
+        vm.openstack_status = 'DELETED'
 
-    # 更新附属资源状态为待回收
-    for resource in vm.attached_resources.filter_by(status=AttachedResource.STATUS_ACTIVE):
-        resource.status = AttachedResource.STATUS_PENDING
-        resource.pending_at = datetime.now()
+        # 更新附属资源状态为待回收
+        for resource in vm.attached_resources.filter_by(status=AttachedResource.STATUS_ACTIVE):
+            resource.status = AttachedResource.STATUS_PENDING
+            resource.pending_at = datetime.now()
 
     log = ChangeLog(
         vm_id=vm.id,
@@ -911,7 +912,7 @@ def vm_recycle(id):
         'openstack_result': message,
         'success': success,
         'old_status': old_status,
-        'new_status': VirtualMachine.STATUS_VM_PENDING
+        'new_status': vm.status
     })
     db.session.add(log)
     db.session.commit()
@@ -919,7 +920,7 @@ def vm_recycle(id):
     if success:
         flash(f'云主机回收完成: {message}', 'success')
     else:
-        flash(f'云主机回收可能失败: {message}', 'warning')
+        flash(f'云主机回收失败，状态未变更: {message}', 'error')
 
     return redirect(url_for('vm_detail', id=id))
 
@@ -1030,6 +1031,7 @@ def vm_recycle_attached(id):
     results = []
     success_count = 0
     fail_count = 0
+    successful_resources = set()
 
     # 从VM记录中获取卷信息
     volumes = vm.get_volumes()
@@ -1048,6 +1050,7 @@ def vm_recycle_attached(id):
             })
             if success:
                 success_count += 1
+                successful_resources.add((AttachedResource.TYPE_VOLUME, vol_id))
             else:
                 fail_count += 1
 
@@ -1060,11 +1063,14 @@ def vm_recycle_attached(id):
         if mac:
             logger.info(f"Deleting port by MAC: {mac} ({ip})")
             # 先通过MAC找到端口ID
-            port = openstack_service.find_port_by_mac(mac)
-            if port:
-                success, msg = openstack_service.delete_port(port.id)
-            else:
-                success, msg = True, "端口不存在或已删除"
+            try:
+                port = openstack_service.find_port_by_mac(mac)
+                if port:
+                    success, msg = openstack_service.delete_port(port.id)
+                else:
+                    success, msg = True, "端口不存在或已删除"
+            except Exception as e:
+                success, msg = False, f"无法确认端口状态，已取消删除: {str(e)}"
             results.append({
                 'type': 'port',
                 'id': mac,
@@ -1074,19 +1080,36 @@ def vm_recycle_attached(id):
             })
             if success:
                 success_count += 1
+                successful_resources.add((AttachedResource.TYPE_PORT, mac))
             else:
                 fail_count += 1
 
-    # 更新附属资源记录状态
+    # 只更新确认删除成功或确认不存在的附属资源记录。
     for resource in vm.attached_resources.filter(
             AttachedResource.status.in_([AttachedResource.STATUS_ACTIVE, AttachedResource.STATUS_PENDING])
     ):
-        resource.status = AttachedResource.STATUS_RECYCLED
-        resource.recycled_at = datetime.now()
+        if (resource.resource_type, resource.resource_id) in successful_resources:
+            resource.status = AttachedResource.STATUS_RECYCLED
+            resource.recycled_at = datetime.now()
 
-    # 更新VM状态为完全回收
+    remaining_resources = vm.attached_resources.filter(
+        AttachedResource.status.in_([AttachedResource.STATUS_ACTIVE, AttachedResource.STATUS_PENDING])
+    ).all()
+    if fail_count == 0 and remaining_resources:
+        for resource in remaining_resources:
+            results.append({
+                'type': resource.resource_type,
+                'id': resource.resource_id,
+                'name': resource.resource_name,
+                'success': False,
+                'message': '资源未在当前同步快照中找到，未执行删除'
+            })
+        fail_count = len(remaining_resources)
+
+    # 仅当所有删除操作成功时，才更新VM状态为完全回收。
     old_status = vm.status
-    vm.status = VirtualMachine.STATUS_RECYCLED
+    if fail_count == 0 and not remaining_resources:
+        vm.status = VirtualMachine.STATUS_RECYCLED
 
     log = ChangeLog(
         vm_id=vm.id,
@@ -1096,14 +1119,14 @@ def vm_recycle_attached(id):
     log.set_change_content({
         'message': f'回收附属资源（成功: {success_count}, 失败: {fail_count}）',
         'old_status': old_status,
-        'new_status': VirtualMachine.STATUS_RECYCLED,
+        'new_status': vm.status,
         'results': results
     })
     db.session.add(log)
     db.session.commit()
 
     if fail_count > 0:
-        flash(f'附属资源回收完成，成功: {success_count}，失败: {fail_count}，请查看变更记录详情', 'warning')
+        flash(f'附属资源部分回收失败，状态保持待回收。成功: {success_count}，失败: {fail_count}', 'warning')
     else:
         flash(f'附属资源回收完成，共处理 {success_count} 个资源', 'success')
 
@@ -1265,17 +1288,5 @@ def log_edit(id):
     return render_template('log_edit.html', log=log, vm=vm, change_types=change_types)
 
 
-@app.route('/logs/<int:id>/delete', methods=['POST'])
-def log_delete(id):
-    """删除变更记录"""
-    log = ChangeLog.query.get_or_404(id)
-    vm_id = log.vm_id
-
-    db.session.delete(log)
-    db.session.commit()
-
-    flash('变更记录已删除', 'success')
-    return redirect(url_for('vm_detail', id=vm_id))
-
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5432, debug=True)
+    app.run(host='0.0.0.0', port=5432, debug=app.config['DEBUG'])

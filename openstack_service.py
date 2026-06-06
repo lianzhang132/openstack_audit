@@ -67,7 +67,7 @@ class OpenStackService:
             return servers
         except Exception as e:
             logger.error(f"Failed to list servers: {e}")
-            return []
+            raise
 
     def get_server(self, server_id):
         """获取单个云主机详情"""
@@ -80,7 +80,7 @@ class OpenStackService:
             return None
         except Exception as e:
             logger.error(f"Failed to get server {server_id}: {e}")
-            return None
+            raise
 
     def get_server_detail(self, server_id):
         """获取云主机完整详情，包括网络、卷等"""
@@ -240,7 +240,8 @@ class OpenStackService:
                 logger.warning(f"Volume {volume_id} not found")
                 return True, "存储卷不存在或已删除"
             except Exception as e:
-                logger.warning(f"Failed to get volume {volume_id}: {e}")
+                logger.error(f"Failed to get volume {volume_id}: {e}")
+                return False, f"无法确认存储卷状态，已取消删除: {str(e)}"
 
             if volume:
                 # 检查卷状态
@@ -339,7 +340,7 @@ class OpenStackService:
             return None
         except Exception as e:
             logger.error(f"Failed to find port by MAC {mac_address}: {e}")
-            return None
+            raise
 
     def list_ports_by_device(self, device_id):
         """根据设备ID获取端口列表"""

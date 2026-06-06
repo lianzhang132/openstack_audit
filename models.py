@@ -4,6 +4,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
 import json
+from sqlalchemy import event
 
 db = SQLAlchemy()
 
@@ -371,6 +372,12 @@ class ChangeLog(db.Model):
             'changed_at': self.changed_at.strftime('%Y-%m-%d %H:%M:%S') if self.changed_at else None,
             'operator': self.operator,
         }
+
+
+@event.listens_for(ChangeLog, 'before_delete')
+def prevent_change_log_delete(mapper, connection, target):
+    raise ValueError('审计记录不可删除')
+
 
 class AttachedResource(db.Model):
     """附属资源表（网卡、存储卷）"""

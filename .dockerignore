@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+__pycache__
+*.py[cod]
+.venv
+venv
+data
+*.db
+*.sqlite
+*.sqlite3
+*.docx
+vm_data.xlsx
+tests
+*.log

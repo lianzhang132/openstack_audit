@@ -379,9 +379,6 @@
                         <span class="timeline-operator">操作人: {{ log.operator or 'system' }}</span>
                         <div class="timeline-actions">
                             <a href="{{ url_for('log_edit', id=log.id) }}" class="btn btn-sm" title="编辑">✏️</a>
-                            <form method="POST" action="{{ url_for('log_delete', id=log.id) }}" class="inline-form" onsubmit="return confirm('确定要删除这条变更记录吗？')">
-                                <button type="submit" class="btn btn-sm btn-danger" title="删除">🗑️</button>
-                            </form>
                         </div>
                     </div>
                     <div class="timeline-body">

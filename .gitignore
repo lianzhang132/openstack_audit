@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local configuration and databases
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local imports and private operator documentation
+vm_data.xlsx
+openstack_guide_fixed.docx
+
+# Test and editor artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+.idea/
+.vscode/
+*.log

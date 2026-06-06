@@ -3,7 +3,7 @@
 """
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import logging
 from config import Config
@@ -16,7 +16,7 @@ scheduler = BackgroundScheduler()
 def sync_openstack_data(app):
     """同步OpenStack数据并检测变更"""
     with app.app_context():
-        from models import db, VirtualMachine, ChangeLog, AttachedResource, Project
+        from models import db, VirtualMachine, ChangeLog, AttachedResource
         from openstack_service import openstack_service
 
         logger.info("Starting OpenStack data sync...")
@@ -62,13 +62,12 @@ def sync_openstack_data(app):
                     vm.openstack_status = detail.get('status')
 
             # 检查已删除的VM
-            all_vms = VirtualMachine.query.filter(
-                VirtualMachine.status.in_([VirtualMachine.STATUS_IN_USE, VirtualMachine.STATUS_VM_PENDING])
-            ).all()
+            all_vms = VirtualMachine.query.filter_by(status=VirtualMachine.STATUS_IN_USE).all()
 
             for vm in all_vms:
                 if vm.uuid not in server_uuids:
-                    if vm.status == VirtualMachine.STATUS_IN_USE:
+                    # 批量列表缺失可能是权限或短暂异常，逐台确认不存在后才更新状态。
+                    if openstack_service.get_server(vm.uuid) is None:
                         # VM已在OpenStack中删除，更新状态
                         vm.status = VirtualMachine.STATUS_VM_PENDING
                         vm.vm_deleted_date = datetime.now().date()
@@ -97,6 +96,7 @@ def sync_openstack_data(app):
         except Exception as e:
             logger.error(f"Error during OpenStack data sync: {e}")
             db.session.rollback()
+            raise
 
 
 def detect_changes(vm, detail):
@@ -198,23 +198,32 @@ def check_expire_status(app):
                 })
                 db.session.add(log)
 
-            # 检查待回收附属资源（VM删除超过30天）
-            threshold_date = today - timedelta(days=Config.ATTACHED_RESOURCE_EXPIRE_DAYS)
+            # 检查待回收附属资源，尊重延期日期和长期保留设置。
             pending_attached_vms = VirtualMachine.query.filter(
                 VirtualMachine.status == VirtualMachine.STATUS_VM_PENDING,
-                VirtualMachine.vm_deleted_date <= threshold_date
+                VirtualMachine.vm_deleted_date != None
             ).all()
 
             for vm in pending_attached_vms:
+                if not vm.is_attached_expired():
+                    continue
+
                 vm.status = VirtualMachine.STATUS_ATTACHED_PENDING
+                for resource in vm.attached_resources.filter_by(status=AttachedResource.STATUS_ACTIVE):
+                    resource.status = AttachedResource.STATUS_PENDING
+                    resource.pending_at = datetime.now()
+
+                attached_expire_date = vm.get_attached_expire_date()
                 log = ChangeLog(
                     vm_id=vm.id,
                     change_type=ChangeLog.TYPE_STATUS_CHANGE,
                     operator='system'
                 )
                 log.set_change_content({
-                    'message': f'云主机删除已超过{Config.ATTACHED_RESOURCE_EXPIRE_DAYS}天，附属资源进入待回收状态',
+                    'message': '附属资源已到期，进入待回收状态',
                     'vm_deleted_date': vm.vm_deleted_date.strftime('%Y-%m-%d'),
+                    'attached_expire_date': attached_expire_date.strftime('%Y-%m-%d')
+                    if attached_expire_date else None,
                     'old_status': VirtualMachine.STATUS_VM_PENDING,
                     'new_status': VirtualMachine.STATUS_ATTACHED_PENDING
                 })
@@ -230,6 +239,10 @@ def check_expire_status(app):
 
 def init_scheduler(app):
     """初始化定时任务"""
+    if scheduler.running:
+        logger.info("Scheduler is already running")
+        return
+
     # 每6小时同步一次OpenStack数据
     scheduler.add_job(
         func=lambda: sync_openstack_data(app),

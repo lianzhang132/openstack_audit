@@ -51,4 +51,4 @@ RUN mkdir -p /app/data
 EXPOSE 5432
 
 # 启动命令
-CMD ["sh", "-c", "python -c 'from app import app; from models import db; app.app_context().push(); db.create_all(); print(\"Database initialized\")' && gunicorn --bind 0.0.0.0:5432 --workers 2 --threads 4 --timeout 120 --access-logfile - --error-logfile - app:app"]
+CMD ["sh", "-c", "ENABLE_SCHEDULER=false python -c 'from app import app; from models import db; app.app_context().push(); db.create_all(); print(\"Database initialized\")' && exec gunicorn --bind 0.0.0.0:5432 --workers 1 --threads 8 --timeout 120 --access-logfile - --error-logfile - app:app"]

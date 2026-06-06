@@ -2,11 +2,17 @@
 配置文件 - 支持Docker环境变量
 """
 import os
+import secrets
+
+
+def env_bool(name, default=False):
+    return os.environ.get(name, str(default)).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 class Config:
     # Flask配置
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'openstack-audit-secret-key-2024')
+    SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
+    DEBUG = env_bool('DEBUG', False)
 
     # 数据库配置
     DATABASE_PATH = os.environ.get('DATABASE_PATH', '/app/data/openstack_audit.db')
@@ -22,7 +28,7 @@ class Config:
     # OpenStack认证配置
     OS_AUTH_URL = os.environ.get('OS_AUTH_URL', 'http://controller:5000/v3')
     OS_USERNAME = os.environ.get('OS_USERNAME', 'admin')
-    OS_PASSWORD = os.environ.get('OS_PASSWORD', 'admin_password')
+    OS_PASSWORD = os.environ.get('OS_PASSWORD', '')
     OS_PROJECT_NAME = os.environ.get('OS_PROJECT_NAME', 'admin')
     OS_USER_DOMAIN_NAME = os.environ.get('OS_USER_DOMAIN_NAME', 'Default')
     OS_PROJECT_DOMAIN_NAME = os.environ.get('OS_PROJECT_DOMAIN_NAME', 'Default')
@@ -34,3 +40,4 @@ class Config:
 
     # 定时任务配置
     SYNC_INTERVAL_HOURS = int(os.environ.get('SYNC_INTERVAL_HOURS', 6))
+    ENABLE_SCHEDULER = env_bool('ENABLE_SCHEDULER', True)
