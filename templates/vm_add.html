@@ -25,6 +25,14 @@
                         </span>
                     </label>
                     <label class="mode-option">
+                        <input type="radio" name="add_mode" value="create" onchange="toggleMode()">
+                        <span class="mode-card">
+                            <span class="mode-icon">🚀</span>
+                            <span class="mode-title">创建虚机</span>
+                            <span class="mode-desc">在OpenStack中创建云主机并记录审计</span>
+                        </span>
+                    </label>
+                    <label class="mode-option">
                         <input type="radio" name="add_mode" value="manual" onchange="toggleMode()">
                         <span class="mode-card">
                             <span class="mode-icon">✏️</span>
@@ -33,6 +41,113 @@
                         </span>
                     </label>
                 </div>
+            </div>
+
+            <!-- 创建模式：OpenStack创建云主机 -->
+            <div class="form-section" id="create_section" style="display:none;">
+                <h3>🚀 创建到OpenStack</h3>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="create_name">云主机名称 <span class="required">*</span></label>
+                        <input type="text" id="create_name" name="create_name" class="form-control" placeholder="如：audit-web-01">
+                    </div>
+                    <div class="form-group">
+                        <label for="operator">操作人</label>
+                        <input type="text" id="operator" name="operator" class="form-control" placeholder="默认使用申请人或admin">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="flavor_id">规格 <span class="required">*</span></label>
+                        <select id="flavor_id" name="flavor_id" class="form-control">
+                            <option value="">-- 选择规格 --</option>
+                            {% for flavor in flavors %}
+                            <option value="{{ flavor.id }}">{{ flavor.name }} ({{ flavor.vcpus }}C/{{ flavor.ram }}MB/{{ flavor.disk }}GB)</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="network_id">网络 <span class="required">*</span></label>
+                        <select id="network_id" name="network_id" class="form-control">
+                            <option value="">-- 选择网络 --</option>
+                            {% for network in networks %}
+                            <option value="{{ network.id }}">{{ network.name }} ({{ network.id[:8] }}...)</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>启动方式</label>
+                    <div class="inline-radio-group">
+                        <label class="radio-label">
+                            <input type="radio" name="boot_source" value="image" checked onchange="toggleBootSource()">
+                            镜像启动
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="boot_source" value="volume" onchange="toggleBootSource()">
+                            卷启动（已有启动卷）
+                        </label>
+                    </div>
+                </div>
+
+                <div class="form-group" id="image_boot_group">
+                    <label for="image_id">镜像 <span class="required">*</span></label>
+                    <select id="image_id" name="image_id" class="form-control">
+                        <option value="">-- 选择镜像 --</option>
+                        {% for image in images %}
+                        <option value="{{ image.id }}">{{ image.name }} ({{ image.id[:8] }}...)</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="form-group" id="volume_boot_group" style="display:none;">
+                    <label for="boot_volume_id">启动卷 <span class="required">*</span></label>
+                    <select id="boot_volume_id" name="boot_volume_id" class="form-control">
+                        <option value="">-- 选择可用卷 --</option>
+                        {% for volume in volumes %}
+                        <option value="{{ volume.id }}">{{ volume.name }}{% if volume.size %} ({{ volume.size }}GB){% endif %} - {{ volume.status }}</option>
+                        {% endfor %}
+                    </select>
+                    <label class="checkbox-label mt-8">
+                        <input type="checkbox" name="delete_volume_on_termination">
+                        删除虚机时删除启动卷
+                    </label>
+                    <small class="text-muted">默认保留启动卷，由附属资源回收流程统一审计和删除。</small>
+                </div>
+
+                <div class="form-section-sub">
+                    <h4>网络端口</h4>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="create_port" name="create_port" onchange="togglePortOptions()">
+                        创建专用端口后再创建虚机
+                    </label>
+                    <div id="port_options" style="display:none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="port_name">端口名称</label>
+                                <input type="text" id="port_name" name="port_name" class="form-control" placeholder="留空则自动使用云主机名称">
+                            </div>
+                            <div class="form-group">
+                                <label for="fixed_ip">固定IP</label>
+                                <input type="text" id="fixed_ip" name="fixed_ip" class="form-control" placeholder="可选">
+                            </div>
+                        </div>
+                        <label class="checkbox-label danger-check">
+                            <input type="checkbox" name="disable_port_security">
+                            禁用端口安全（port_security_enabled=False，清空安全组）
+                        </label>
+                        <small class="text-muted">用于特殊网络场景。该动作会写入审计记录。</small>
+                    </div>
+                </div>
+
+                {% if not images or not flavors or not networks %}
+                <div class="alert alert-warning">
+                    当前未能完整加载镜像、规格或网络列表。请检查OpenStack连接配置，或稍后刷新页面。
+                </div>
+                {% endif %}
             </div>
 
             <!-- 自动模式：OpenStack信息 -->
@@ -242,10 +357,12 @@
     display: flex;
     gap: 20px;
     margin-bottom: 20px;
+    flex-wrap: wrap;
 }
 
 .mode-option {
     flex: 1;
+    min-width: 180px;
     cursor: pointer;
 }
 
@@ -283,6 +400,37 @@
     color: #909399;
     text-align: center;
 }
+
+.inline-radio-group {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+}
+
+.radio-label {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.form-section-sub {
+    border: 1px solid #ebeef5;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 16px;
+}
+
+.form-section-sub h4 {
+    margin-top: 0;
+}
+
+.danger-check {
+    color: #c45656;
+}
+
+.mt-8 {
+    margin-top: 8px;
+}
 </style>
 {% endblock %}
 
@@ -291,25 +439,51 @@
 function toggleMode() {
     const mode = document.querySelector('input[name="add_mode"]:checked').value;
     const autoSection = document.getElementById('auto_section');
+    const createSection = document.getElementById('create_section');
     const manualSection = document.getElementById('manual_section');
     const uuidInput = document.getElementById('uuid');
     const uuidManual = document.getElementById('uuid_manual');
+    const createName = document.getElementById('create_name');
 
     if (mode === 'auto') {
         autoSection.style.display = 'block';
+        createSection.style.display = 'none';
         manualSection.style.display = 'none';
         uuidInput.name = 'uuid';
         uuidInput.required = true;
         uuidManual.name = '';
         uuidManual.required = false;
-    } else {
+        createName.required = false;
+    } else if (mode === 'manual') {
         autoSection.style.display = 'none';
+        createSection.style.display = 'none';
         manualSection.style.display = 'block';
         uuidInput.name = '';
         uuidInput.required = false;
         uuidManual.name = 'uuid';
         uuidManual.required = true;
+        createName.required = false;
+    } else {
+        autoSection.style.display = 'none';
+        createSection.style.display = 'block';
+        manualSection.style.display = 'none';
+        uuidInput.name = '';
+        uuidInput.required = false;
+        uuidManual.name = '';
+        uuidManual.required = false;
+        createName.required = true;
     }
+}
+
+function toggleBootSource() {
+    const bootSource = document.querySelector('input[name="boot_source"]:checked').value;
+    document.getElementById('image_boot_group').style.display = bootSource === 'image' ? 'block' : 'none';
+    document.getElementById('volume_boot_group').style.display = bootSource === 'volume' ? 'block' : 'none';
+}
+
+function togglePortOptions() {
+    const checked = document.getElementById('create_port').checked;
+    document.getElementById('port_options').style.display = checked ? 'block' : 'none';
 }
 
 function selectServer(uuid) {
@@ -370,6 +544,9 @@ function toggleLongTerm() {
 document.addEventListener('DOMContentLoaded', function() {
     const today = new Date().toISOString().split('T')[0];
     document.getElementById('created_date').value = today;
+    toggleMode();
+    toggleBootSource();
+    togglePortOptions();
 });
 </script>
 {% endblock %}

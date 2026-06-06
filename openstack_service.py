@@ -11,6 +11,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _resource_get(resource, key, default=None):
+    if isinstance(resource, dict):
+        return resource.get(key, default)
+    return getattr(resource, key, default)
+
+
 class OpenStackService:
     """OpenStack服务类"""
 
@@ -104,6 +110,21 @@ class OpenStackService:
                 'volumes': [],
             }
 
+            ports_by_mac = {}
+            ports_by_ip = {}
+            try:
+                ports = list(conn.network.ports(device_id=server.id))
+                for port in ports:
+                    mac = _resource_get(port, 'mac_address')
+                    if mac:
+                        ports_by_mac[mac] = port
+                    for fixed_ip in _resource_get(port, 'fixed_ips', []) or []:
+                        ip_address = fixed_ip.get('ip_address')
+                        if ip_address:
+                            ports_by_ip[ip_address] = port
+            except Exception as e:
+                logger.warning(f"Failed to get ports for server {server_id}: {e}")
+
             # 获取镜像信息
             if server.image:
                 image_id = server.image.get('id') if isinstance(server.image, dict) else server.image
@@ -144,6 +165,13 @@ class OpenStackService:
                             'mac': addr.get('OS-EXT-IPS-MAC:mac_addr'),
                             'type': addr.get('OS-EXT-IPS:type'),
                         }
+                        port = ports_by_mac.get(port_info['mac']) or ports_by_ip.get(port_info['ip'])
+                        if port:
+                            port_info.update({
+                                'port_id': port.id,
+                                'port_name': _resource_get(port, 'name'),
+                                'port_security_enabled': _resource_get(port, 'port_security_enabled'),
+                            })
                         result['networks'].append(port_info)
 
             # 获取挂载的卷
@@ -176,6 +204,60 @@ class OpenStackService:
         except Exception as e:
             logger.error(f"Failed to get server detail {server_id}: {e}")
             return None
+
+    def create_port(self, network_id, name=None, fixed_ip=None, disable_port_security=False):
+        """创建网络端口，可选择禁用端口安全"""
+        conn = self.get_connection()
+        attrs = {
+            'network_id': network_id,
+        }
+        if name:
+            attrs['name'] = name
+        if fixed_ip:
+            attrs['fixed_ips'] = [{'ip_address': fixed_ip}]
+        if disable_port_security:
+            attrs['port_security_enabled'] = False
+            attrs['security_groups'] = []
+
+        port = conn.network.create_port(**attrs)
+        return {
+            'id': port.id,
+            'name': _resource_get(port, 'name'),
+            'network_id': _resource_get(port, 'network_id') or network_id,
+            'mac': _resource_get(port, 'mac_address'),
+            'fixed_ips': _resource_get(port, 'fixed_ips', []) or [],
+            'port_security_enabled': _resource_get(port, 'port_security_enabled'),
+            'security_groups': _resource_get(port, 'security_groups', []) or [],
+        }
+
+    def create_server(self, name, flavor_id, image_id=None, boot_volume_id=None,
+                      network_id=None, port_id=None, delete_volume_on_termination=False):
+        """创建云主机，支持镜像启动或已有卷启动"""
+        conn = self.get_connection()
+        networks = []
+        if port_id:
+            networks.append({'port': port_id})
+        elif network_id:
+            networks.append({'uuid': network_id})
+
+        attrs = {
+            'name': name,
+            'flavor_id': flavor_id,
+            'networks': networks,
+        }
+
+        if boot_volume_id:
+            attrs['block_device_mapping_v2'] = [{
+                'uuid': boot_volume_id,
+                'source_type': 'volume',
+                'destination_type': 'volume',
+                'boot_index': 0,
+                'delete_on_termination': bool(delete_volume_on_termination),
+            }]
+        else:
+            attrs['image_id'] = image_id
+
+        return conn.compute.create_server(**attrs)
 
     def delete_server(self, server_id):
         """删除云主机"""
@@ -357,7 +439,13 @@ class OpenStackService:
         conn = self.get_connection()
         try:
             volumes = list(conn.block_storage.volumes(all_projects=all_projects))
-            return volumes
+            return [{
+                'id': volume.id,
+                'name': _resource_get(volume, 'name') or volume.id,
+                'size': _resource_get(volume, 'size'),
+                'status': _resource_get(volume, 'status'),
+                'bootable': _resource_get(volume, 'is_bootable') or _resource_get(volume, 'bootable'),
+            } for volume in volumes]
         except Exception as e:
             logger.error(f"Failed to list volumes: {e}")
             return []

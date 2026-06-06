@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import json
 import logging
 from io import BytesIO
+from uuid import uuid4
 
 from config import Config
 from models import db, init_db, Project, VirtualMachine, ChangeLog, AttachedResource
@@ -131,6 +132,374 @@ def update_expire_status():
 
     if expired_vms or any(vm.status == VirtualMachine.STATUS_ATTACHED_PENDING for vm in pending_vms):
         db.session.commit()
+
+
+def _parse_date(value):
+    if value:
+        return datetime.strptime(value, '%Y-%m-%d').date()
+    return None
+
+
+def _get_resource_id(resource):
+    if isinstance(resource, dict):
+        return resource.get('id')
+    return getattr(resource, 'id', None)
+
+
+def _is_truthy(value):
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def apply_business_form_fields(vm, form, default_status=None):
+    """将页面上的业务审计字段写入VM记录"""
+    vm.purpose = form.get('purpose', '')
+    vm.is_long_term = form.get('is_long_term') == 'on'
+    vm.long_term_reason = form.get('long_term_reason', '')
+    vm.applicant = form.get('applicant', '')
+
+    status = form.get('status', default_status or VirtualMachine.STATUS_IN_USE)
+    if status in [s[0] for s in VirtualMachine.STATUS_CHOICES]:
+        vm.status = status
+
+    vm.created_date = _parse_date(form.get('created_date')) or datetime.now().date()
+    expire_date = _parse_date(form.get('expire_date'))
+    if expire_date:
+        vm.expire_date = expire_date
+    elif not vm.is_long_term:
+        vm.expire_date = vm.created_date + timedelta(days=Config.VM_DEFAULT_EXPIRE_DAYS)
+    else:
+        vm.expire_date = None
+
+    vm_deleted_date = _parse_date(form.get('vm_deleted_date'))
+    if vm_deleted_date:
+        vm.vm_deleted_date = vm_deleted_date
+
+    project_id = form.get('project_id')
+    if project_id:
+        vm.project_id = int(project_id)
+
+
+def update_vm_record_from_detail(vm, detail):
+    """将OpenStack详情写入VM记录"""
+    vm.name = detail.get('name')
+    vm.host = detail.get('host')
+    vm.flavor = detail.get('flavor')
+    vm.openstack_status = detail.get('status')
+    vm.openstack_project_id = detail.get('project_id')
+
+    if detail.get('image'):
+        vm.image_info = json.dumps(detail['image'], ensure_ascii=False)
+    if detail.get('flavor_detail'):
+        vm.flavor_detail = json.dumps(detail['flavor_detail'], ensure_ascii=False)
+
+    vm.set_networks(detail.get('networks', []))
+    vm.set_volumes(detail.get('volumes', []))
+    vm.last_sync_at = datetime.now()
+    vm.last_sync_data = json.dumps(detail, ensure_ascii=False, default=str)
+
+
+def append_attached_resources_from_detail(vm, detail):
+    """根据OpenStack详情创建附属资源审计记录"""
+    for port in detail.get('networks', []):
+        resource_id = port.get('port_id') or port.get('id') or port.get('mac')
+        if resource_id:
+            resource = AttachedResource(
+                resource_type=AttachedResource.TYPE_PORT,
+                resource_id=resource_id,
+                resource_name=port.get('port_name') or port.get('network_name'),
+            )
+            resource.set_resource_info(port)
+            vm.attached_resources.append(resource)
+
+    for vol in detail.get('volumes', []):
+        vol_id = vol.get('id')
+        if vol_id:
+            resource = AttachedResource(
+                resource_type=AttachedResource.TYPE_VOLUME,
+                resource_id=vol_id,
+                resource_name=vol.get('name'),
+            )
+            resource.set_resource_info(vol)
+            vm.attached_resources.append(resource)
+
+
+def has_attached_resource(vm, resource_type, resource_id):
+    if not resource_id:
+        return False
+    return vm.attached_resources.filter_by(
+        resource_type=resource_type,
+        resource_id=resource_id
+    ).first() is not None
+
+
+def ensure_attached_resource(vm, resource_type, resource_id, resource_name=None, resource_info=None):
+    if not resource_id or has_attached_resource(vm, resource_type, resource_id):
+        return
+    resource = AttachedResource(
+        resource_type=resource_type,
+        resource_id=resource_id,
+        resource_name=resource_name,
+    )
+    if resource_info:
+        resource.set_resource_info(resource_info)
+    vm.attached_resources.append(resource)
+
+
+def build_network_from_created_port(port_info, network_id):
+    fixed_ips = port_info.get('fixed_ips') or []
+    fixed_ip = fixed_ips[0].get('ip_address') if fixed_ips else ''
+    return {
+        'network_id': network_id,
+        'network_name': port_info.get('network_name') or network_id,
+        'port_id': port_info.get('id'),
+        'port_name': port_info.get('name'),
+        'ip': fixed_ip,
+        'mac': port_info.get('mac'),
+        'port_security_enabled': port_info.get('port_security_enabled'),
+    }
+
+
+def build_fallback_detail(server_id, form, created_port_info=None):
+    boot_source = form.get('boot_source', 'image')
+    detail = {
+        'uuid': server_id,
+        'name': form.get('create_name', '').strip(),
+        'status': 'BUILD',
+        'project_id': None,
+        'host': None,
+        'image': None,
+        'flavor': form.get('flavor_id'),
+        'flavor_detail': {},
+        'networks': [],
+        'volumes': [],
+    }
+
+    if boot_source == 'image':
+        detail['image'] = {'id': form.get('image_id'), 'name': form.get('image_id')}
+    else:
+        detail['volumes'].append({
+            'id': form.get('boot_volume_id'),
+            'name': form.get('boot_volume_id'),
+            'bootable': True,
+        })
+
+    if created_port_info:
+        detail['networks'].append(build_network_from_created_port(created_port_info, form.get('network_id')))
+    else:
+        detail['networks'].append({
+            'network_id': form.get('network_id'),
+            'network_name': form.get('network_id'),
+            'ip': '',
+            'mac': '',
+        })
+
+    return detail
+
+
+def create_failed_create_record(form, created_port_info, error_message):
+    """端口已创建但虚机创建失败时，保留可审计、可清理的本地记录"""
+    vm = VirtualMachine(
+        uuid=f"create-failed-{uuid4().hex}",
+        name=form.get('create_name', '').strip() or 'create-failed',
+        status=VirtualMachine.STATUS_VM_PENDING,
+        openstack_status='CREATE_FAILED',
+        vm_deleted_date=datetime.now().date(),
+    )
+    apply_business_form_fields(vm, form, default_status=VirtualMachine.STATUS_VM_PENDING)
+    vm.status = VirtualMachine.STATUS_VM_PENDING
+    vm.openstack_status = 'CREATE_FAILED'
+    vm.vm_deleted_date = datetime.now().date()
+
+    if created_port_info:
+        network = build_network_from_created_port(created_port_info, form.get('network_id'))
+        vm.set_networks([network])
+        resource = AttachedResource(
+            resource_type=AttachedResource.TYPE_PORT,
+            resource_id=created_port_info.get('id') or created_port_info.get('mac'),
+            resource_name=created_port_info.get('name') or form.get('port_name') or form.get('network_id'),
+        )
+        resource.set_resource_info(network)
+        vm.attached_resources.append(resource)
+
+    db.session.add(vm)
+    db.session.flush()
+
+    if created_port_info:
+        port_log = ChangeLog(
+            vm_id=vm.id,
+            change_type=ChangeLog.TYPE_CREATE,
+            operator=form.get('operator') or form.get('applicant') or 'admin'
+        )
+        port_log.set_change_content({
+            'message': '创建网络端口',
+            'action': 'create_port',
+            'port': created_port_info,
+            'disable_port_security': created_port_info.get('port_security_enabled') is False,
+            'server_create_failed': True,
+        })
+        db.session.add(port_log)
+
+    log = ChangeLog(
+        vm_id=vm.id,
+        change_type=ChangeLog.TYPE_CREATE,
+        operator=form.get('operator') or form.get('applicant') or 'admin'
+    )
+    log.set_change_content({
+        'message': '创建云主机失败，已保留待清理记录',
+        'action': 'create_server_failed',
+        'error': error_message,
+        'created_port': created_port_info,
+    })
+    db.session.add(log)
+    db.session.commit()
+    return vm
+
+
+def handle_openstack_vm_create():
+    form = request.form
+    name = form.get('create_name', '').strip()
+    boot_source = form.get('boot_source', 'image')
+    flavor_id = form.get('flavor_id', '').strip()
+    image_id = form.get('image_id', '').strip()
+    boot_volume_id = form.get('boot_volume_id', '').strip()
+    network_id = form.get('network_id', '').strip()
+    create_port = form.get('create_port') == 'on'
+    disable_port_security = form.get('disable_port_security') == 'on'
+    created_port_info = None
+
+    if not name:
+        flash('云主机名称不能为空', 'error')
+        return redirect(url_for('vm_add'))
+    if not flavor_id:
+        flash('请选择规格', 'error')
+        return redirect(url_for('vm_add'))
+    if boot_source == 'image' and not image_id:
+        flash('镜像启动需要选择镜像', 'error')
+        return redirect(url_for('vm_add'))
+    if boot_source == 'volume' and not boot_volume_id:
+        flash('卷启动需要选择启动卷', 'error')
+        return redirect(url_for('vm_add'))
+    if not network_id:
+        flash('请选择网络', 'error')
+        return redirect(url_for('vm_add'))
+
+    try:
+        if create_port:
+            created_port_info = openstack_service.create_port(
+                network_id=network_id,
+                name=form.get('port_name', '').strip() or f"{name}-port",
+                fixed_ip=form.get('fixed_ip', '').strip() or None,
+                disable_port_security=disable_port_security,
+            )
+
+        server = openstack_service.create_server(
+            name=name,
+            flavor_id=flavor_id,
+            image_id=image_id if boot_source == 'image' else None,
+            boot_volume_id=boot_volume_id if boot_source == 'volume' else None,
+            network_id=network_id if not created_port_info else None,
+            port_id=created_port_info.get('id') if created_port_info else None,
+            delete_volume_on_termination=form.get('delete_volume_on_termination') == 'on',
+        )
+        server_id = _get_resource_id(server)
+        if not server_id:
+            raise RuntimeError('OpenStack未返回云主机ID')
+
+        if VirtualMachine.query.filter_by(uuid=server_id).first():
+            raise RuntimeError(f'云主机记录已存在: {server_id}')
+
+        detail = openstack_service.get_server_detail(server_id)
+        if not detail:
+            detail = build_fallback_detail(server_id, form, created_port_info)
+
+        vm = VirtualMachine(uuid=server_id)
+        update_vm_record_from_detail(vm, detail)
+        apply_business_form_fields(vm, form, default_status=VirtualMachine.STATUS_IN_USE)
+        db.session.add(vm)
+        db.session.flush()
+        append_attached_resources_from_detail(vm, detail)
+
+        if created_port_info:
+            port_network = build_network_from_created_port(created_port_info, network_id)
+            ensure_attached_resource(
+                vm,
+                AttachedResource.TYPE_PORT,
+                created_port_info.get('id') or created_port_info.get('mac'),
+                created_port_info.get('name') or form.get('port_name') or network_id,
+                port_network,
+            )
+            if not any(net.get('port_id') == created_port_info.get('id') for net in vm.get_networks()):
+                networks = vm.get_networks()
+                networks.append(port_network)
+                vm.set_networks(networks)
+
+        if boot_source == 'volume':
+            volume_info = {
+                'id': boot_volume_id,
+                'name': boot_volume_id,
+                'bootable': True,
+                'delete_on_termination': form.get('delete_volume_on_termination') == 'on',
+            }
+            ensure_attached_resource(
+                vm,
+                AttachedResource.TYPE_VOLUME,
+                boot_volume_id,
+                boot_volume_id,
+                volume_info,
+            )
+            if not any(volume.get('id') == boot_volume_id for volume in vm.get_volumes()):
+                volumes = vm.get_volumes()
+                volumes.append(volume_info)
+                vm.set_volumes(volumes)
+
+        if created_port_info:
+            port_log = ChangeLog(
+                vm_id=vm.id,
+                change_type=ChangeLog.TYPE_CREATE,
+                operator=form.get('operator') or form.get('applicant') or 'admin'
+            )
+            port_log.set_change_content({
+                'message': '创建网络端口',
+                'action': 'create_port',
+                'port': created_port_info,
+                'disable_port_security': disable_port_security,
+            })
+            db.session.add(port_log)
+
+        create_log = ChangeLog(
+            vm_id=vm.id,
+            change_type=ChangeLog.TYPE_CREATE,
+            operator=form.get('operator') or form.get('applicant') or 'admin'
+        )
+        create_log.set_change_content({
+            'message': '创建云主机',
+            'action': 'create_server',
+            'server_id': server_id,
+            'boot_source': boot_source,
+            'image_id': image_id if boot_source == 'image' else None,
+            'boot_volume_id': boot_volume_id if boot_source == 'volume' else None,
+            'flavor_id': flavor_id,
+            'network_id': network_id,
+            'created_port_id': created_port_info.get('id') if created_port_info else None,
+        })
+        db.session.add(create_log)
+        db.session.commit()
+
+        flash('云主机创建成功，已写入审计记录', 'success')
+        return redirect(url_for('vm_detail', id=vm.id))
+
+    except Exception as e:
+        db.session.rollback()
+        if created_port_info:
+            try:
+                failed_vm = create_failed_create_record(form, created_port_info, str(e))
+                flash(f'云主机创建失败，已记录已创建端口以便后续回收: {str(e)}', 'error')
+                return redirect(url_for('vm_detail', id=failed_vm.id))
+            except Exception as audit_err:
+                db.session.rollback()
+                logger.error(f"Failed to create audit record for failed VM create: {audit_err}")
+        flash(f'云主机创建失败: {str(e)}', 'error')
+        return redirect(url_for('vm_add'))
 
 # ============ Bug 3 修复：Excel导出 ============
 def to_export_dict(self):
@@ -528,8 +897,11 @@ def vm_list():
 def vm_add():
     """添加云主机记录"""
     if request.method == 'POST':
-        uuid = request.form.get('uuid', '').strip()
         add_mode = request.form.get('add_mode', 'auto')  # auto 或 manual
+        if add_mode == 'create':
+            return handle_openstack_vm_create()
+
+        uuid = request.form.get('uuid', '').strip()
 
         if not uuid:
             flash('UUID不能为空', 'error')
@@ -568,11 +940,12 @@ def vm_add():
 
                 # 创建附属资源记录
                 for port in detail.get('networks', []):
-                    if port.get('mac'):
+                    resource_id = port.get('port_id') or port.get('id') or port.get('mac')
+                    if resource_id:
                         resource = AttachedResource(
                             resource_type=AttachedResource.TYPE_PORT,
-                            resource_id=port.get('mac'),
-                            resource_name=port.get('network_name'),
+                            resource_id=resource_id,
+                            resource_name=port.get('port_name') or port.get('network_name'),
                         )
                         resource.set_resource_info(port)
                         vm.attached_resources.append(resource)
@@ -692,14 +1065,38 @@ def vm_add():
     projects = Project.query.order_by(Project.name).all()
 
     # 从OpenStack获取可选的服务器列表
+    available_servers = []
+    images = []
+    flavors = []
+    networks = []
+    volumes = []
     try:
         servers = openstack_service.list_servers(all_projects=True)
         existing_uuids = {vm.uuid for vm in VirtualMachine.query.all()}
         available_servers = [s for s in servers if s.id not in existing_uuids]
     except:
-        available_servers = []
+        pass
 
-    return render_template('vm_add.html', projects=projects, available_servers=available_servers)
+    try:
+        images = openstack_service.list_images()
+        flavors = openstack_service.list_flavors()
+        networks = openstack_service.list_networks()
+        volumes = [
+            volume for volume in openstack_service.list_volumes(all_projects=True)
+            if str(volume.get('status', '')).lower() == 'available' and _is_truthy(volume.get('bootable'))
+        ]
+    except Exception as e:
+        logger.warning(f"Failed to load OpenStack create resources: {e}")
+
+    return render_template(
+        'vm_add.html',
+        projects=projects,
+        available_servers=available_servers,
+        images=images,
+        flavors=flavors,
+        networks=networks,
+        volumes=volumes,
+    )
 
 
 @app.route('/vms/<int:id>')
@@ -1057,30 +1454,34 @@ def vm_recycle_attached(id):
     # 从VM记录中获取网络信息（通过MAC删除端口）
     networks = vm.get_networks()
     for net in networks:
+        port_id = net.get('port_id') or net.get('id')
         mac = net.get('mac')
         ip = net.get('ip', '')
         network_name = net.get('network_name', '')
-        if mac:
-            logger.info(f"Deleting port by MAC: {mac} ({ip})")
-            # 先通过MAC找到端口ID
+        if port_id or mac:
+            logger.info(f"Deleting port: {port_id or mac} ({ip})")
             try:
-                port = openstack_service.find_port_by_mac(mac)
-                if port:
-                    success, msg = openstack_service.delete_port(port.id)
+                if port_id:
+                    success, msg = openstack_service.delete_port(port_id)
                 else:
-                    success, msg = True, "端口不存在或已删除"
+                    # 兼容早期只记录MAC地址的历史数据
+                    port = openstack_service.find_port_by_mac(mac)
+                    if port:
+                        success, msg = openstack_service.delete_port(port.id)
+                    else:
+                        success, msg = True, "端口不存在或已删除"
             except Exception as e:
                 success, msg = False, f"无法确认端口状态，已取消删除: {str(e)}"
             results.append({
                 'type': 'port',
-                'id': mac,
+                'id': port_id or mac,
                 'name': f"{network_name} - {ip}",
                 'success': success,
                 'message': msg
             })
             if success:
                 success_count += 1
-                successful_resources.add((AttachedResource.TYPE_PORT, mac))
+                successful_resources.add((AttachedResource.TYPE_PORT, port_id or mac))
             else:
                 fail_count += 1
 
